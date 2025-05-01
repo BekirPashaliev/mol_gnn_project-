@@ -1,0 +1,41 @@
+data:
+  raw_csv: mol_gnn_project/data/raw/compounds.csv   # id,smiles,ic50 (µM)
+  processed_dataset: mol_gnn_project/data/processed/dataset.pt
+  use_cache: true
+
+
+
+split:
+  train: 0.7
+  val: 0.15
+  test: 0.15
+  random_state: 42
+
+vae:
+  hidden_dim: 256
+  num_layers: 3
+  latent_dim: 64
+  beta: 0.1
+  batch_size: 128
+  epochs: 50
+  lr: 1e-3
+  weight_decay: 1e-5
+
+regressor:
+  hidden_dims: [128, 64]
+  dropout: 0.2
+  batch_size: 128
+  epochs: 30
+  lr: 1e-3
+  weight_decay: 1e-5
+
+generation:
+  n_seeds: 100
+  n_steps: 50
+  step_size: 0.05  # η in gradient search
+  top_k: 100       # number of unique decoded SMILES to keep
+
+logging:
+  log_dir: runs/
+  checkpoint_dir: checkpoints/
+
