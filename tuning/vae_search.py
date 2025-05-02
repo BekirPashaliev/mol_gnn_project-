@@ -1,60 +1,57 @@
 # tuning/vae_search.py
+
 from __future__ import annotations
 
-"""Optuna search space + objective for GraphVAE hyperparameters."""
+"""Optuna‑search конфигов для Graph VAE."""
 
 from pathlib import Path
 from typing import Dict
-
 import optuna
-import yaml
+from sklearn.model_selection import train_test_split
+import torch
 
+from torch.utils.data import Subset
+
+from mol_gnn_project.models.vae import GraphVAE
 from mol_gnn_project.training.vae_trainer import run_training_vae
 
-__all__ = ["define_search_space_vae", "objective_vae", "run_optuna_vae"]
+__all__ = ["objective_vae", "define_search_space_vae"]
+
 
 
 def define_search_space_vae(trial: optuna.Trial) -> Dict:
     return {
-        "hidden_dim": trial.suggest_categorical("hidden_dim", [128, 256, 384]),
+        "latent_dim": trial.suggest_categorical("latent_dim", [32, 64, 128, 256]),
+        "hidden_dim": trial.suggest_categorical("hidden_dim", [128, 256]),
         "num_layers": trial.suggest_int("num_layers", 2, 5),
-        "latent_dim": trial.suggest_categorical("latent_dim", [32, 64, 128]),
-        "beta": trial.suggest_float("beta", 0.05, 0.3),
         "lr": trial.suggest_loguniform("lr", 1e-4, 5e-3),
+        "dropout": trial.suggest_uniform("dropout", 0.0, 0.3),
     }
 
+def objective_vae(trial:optuna.Trial,dataset,cfg_base:dict,log_root:Path):
+    cfg=cfg_base.copy();cfg.update(define_search_space_vae(trial))
+    train_idx,val_idx=train_test_split(range(len(dataset)),test_size=0.15,random_state=42)
+    train_ds=Subset(dataset,train_idx);val_ds=Subset(dataset,val_idx)
+    # определяем dims
+    node_dim=train_ds[0].x.size(1)
+    edge_dim=None
+    if hasattr(train_ds[0],"edge_attr") and train_ds[0].edge_attr is not None:
+        edge_dim=train_ds[0].edge_attr.size(1)
+    model=GraphVAE(
+        node_dim=node_dim,
+        hidden_dim=cfg["hidden_dim"],
+        latent_dim=cfg["latent_dim"],
+        num_layers=cfg["num_layers"],
+        edge_decode=False,
+        edge_dim=edge_dim,
+    )
 
-def _patch_config(base_cfg: Dict, patch: Dict) -> Dict:
-    cfg = yaml.safe_load(yaml.dump(base_cfg))  # deep copy
-    cfg["vae"].update(patch)
-    return cfg
+    run_training_vae(
+        model,
+        train_ds,
+        val_ds,
+        cfg,
+        Path(log_root) / f"trial_{trial.number}")
 
-
-def objective_vae(trial: optuna.Trial, base_config_path: Path) -> float:
-    with base_config_path.open("r", encoding="utf-8") as f:
-        base_cfg = yaml.safe_load(f)
-
-    patch = define_search_space_vae(trial)
-    cfg = _patch_config(base_cfg, patch)
-
-    # save temporary config file for this trial
-    tmp_cfg_path = base_config_path.parent / f"_optuna_tmp_{trial.number}.yaml"
-    tmp_cfg_path.write_text(yaml.dump(cfg))
-
-    # run training (returns nothing, we need to parse val_loss from logger or ckpt)
-    # For simplicity, we rely on run_training_vae printing "val {value}" at each epoch.
-    # Here we call run_training_vae and capture minimal val_loss from a small #epochs subset.
-    cfg["vae"]["epochs"] = 10  # speed-up during search
-    tmp_cfg_path.write_text(yaml.dump(cfg))
-    run_training_vae(tmp_cfg_path)
-
-    # after run, val_loss is stored in checkpoints filename or logs; for now,
-    # assume best_val saved in file with name pattern containing value.
-    # Stub: return dummy value (trial number) – replace with real parsing.
-    return float(trial.number)
-
-
-def run_optuna_vae(cfg_path: str | Path, n_trials: int = 20):
-    study = optuna.create_study(direction="minimize")
-    study.optimize(lambda t: objective_vae(t, Path(cfg_path)), n_trials=n_trials)
-    print("Best trial:", study.best_trial.params)
+    best = torch.load(Path(log_root) / f"trial_{trial.number}" / "vae_best.ckpt", map_location="cpu")
+    return best.get("val_loss", 0.0)

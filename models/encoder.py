@@ -20,7 +20,7 @@ Edge‑фичи (`edge_attr`) поддерживаются только у GINE;
 передаётся `None`.
 """
 
-from typing import Literal, List
+from typing import Literal, List, Optional
 
 import torch
 from torch import nn
@@ -49,6 +49,7 @@ class GraphEncoder(nn.Module):
         dropout: float = 0.0,
         residual: bool = False,
         batch_norm: bool = True,
+        edge_dim: Optional[int] = None,
     ) -> None:
         super().__init__()
 
@@ -57,7 +58,7 @@ class GraphEncoder(nn.Module):
 
         self.gnn_type = gnn_type
         self.residual = residual
-        self.dropout = dropout
+        self.edge_dim = edge_dim
 
         dims: List[int] = [in_dim] + [hidden_dim] * (num_layers - 1) + [out_dim]
 
@@ -73,30 +74,37 @@ class GraphEncoder(nn.Module):
                 )
             layer_cls = _LAYER_MAP[gnn_type]
             if gnn_type == "gine":
-                conv = layer_cls(mlp, edge_dim=None)  # edge_attr передаётся в forward
+                conv = layer_cls(mlp, edge_dim=edge_dim)
             elif gnn_type == "gin":
                 conv = layer_cls(mlp)
             else:
                 conv = layer_cls(d_in, d_out)
             self.convs.append(conv)
-            if batch_norm and i != num_layers - 1:
+            if batch_norm and i < num_layers - 1:
                 self.norms.append(nn.BatchNorm1d(d_out))
 
         self.act = act
         self.drop = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
 
     # ------------------------------------------------------------------
-    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr=None, batch=None):
+    def forward(
+            self, x: torch.Tensor,
+            edge_index: torch.Tensor,
+            edge_attr: Optional[torch.Tensor]=None,
+            batch: Optional[torch.Tensor]=None
+    ) -> torch.Tensor:
         """Проброс через стэк слоёв.
 
         Параметр *batch* не используется, но оставлен для совместимости с
         readout, чтобы можно было вызвать encoder внутри единой модели.
         """
         for idx, conv in enumerate(self.convs):
-            h = conv(x, edge_index, edge_attr) if self.gnn_type == "gine" else conv(x, edge_index)
-            if idx != len(self.convs) - 1:  # все кроме последнего
-                if self.norms is not None:
-                    h = self.norms[idx](h)
+            if self.gnn_type == "gine":
+                h = conv(x, edge_index, edge_attr)
+            else:
+                h = conv(x, edge_index)
+            if idx != len(self.convs) - 1:
+                if self.norms: h = self.norms[idx](h)
                 h = self.act(h)
                 h = self.drop(h)
                 if self.residual and h.shape == x.shape:

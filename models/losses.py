@@ -2,49 +2,70 @@
 
 from __future__ import annotations
 
-"""GraphDataset – wraps molecular graphs for PyTorch Geometric."""
+"""Набор функций лоссов для проекта Graph VAE.
 
-from pathlib import Path
-from typing import List, Tuple
+* **recon_loss**  – восстанавливает узловые признаки (MSE или CE).
+* **kld_loss**    – KL‑дивергенция между q(z|x) и N(0,1).
+* **ic50_loss**   – MAE‑регрессия (понадобится на Stage B).
 
+Все функции возвращают одно число‑тензор (scalar Tensor).
+"""
+
+from typing import Literal, Optional
 import torch
-from torch_geometric.data import Data, InMemoryDataset
+import torch.nn.functional as F
 
-from mol_gnn_project.graphs.converter import mol_from_smiles, mol_to_graph_data
+__all__ = [
+    "recon_loss",
+    "kld_loss",
+    "ic50_loss",
+]
 
-__all__ = ["GraphDataset", "build_graph_dataset"]
+# -----------------------------------------------------------------------------
 
+def recon_loss(
+    x_hat: torch.Tensor,
+    x_true: torch.Tensor,
+    mode: Literal["mse", "ce"] = "mse",
+) -> torch.Tensor:
+    """Считает ошибку реконструкции узловых признаков.
 
-def build_graph_dataset(records: List[Tuple[str, str, float]]):
-    """Utility to create a *GraphDataset* on-the-fly."""
-    return GraphDataset(records)
+    Параметры
+    ----------
+    x_hat : Tensor  – предсказанные признаки (N×F).
+    x_true: Tensor  – правдивые признаки  (N×F).
+    mode  : "mse" – непрерывные признаки,
+            "ce"  – x_true — one‑hot: превращаем в индексы и считаем CrossEntropy.
+    """
+    if mode == "mse":
+        return F.mse_loss(x_hat, x_true, reduction="mean")
+    if mode == "ce":
+        cls = x_true.argmax(dim=-1)
+        return F.cross_entropy(x_hat, cls, reduction="mean")
+    raise ValueError(f"Unsupported recon mode: {mode}")
 
+# -----------------------------------------------------------------------------
 
-class GraphDataset(InMemoryDataset):
-    def __init__(
-        self,
-        records: List[Tuple[str, str, float]],
-        root: str | Path = "./",
-        transform=None,
-        pre_transform=None,
-    ):
-        self.records = records
-        super().__init__(root, transform, pre_transform)
-        self.data, self.slices = self.process_records(records)
+def kld_loss(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+    """KL‑дивергенция *в среднем по батчу*.
+    D_KL( q(z|x) || N(0,1) ) = −½ Σ(1 + logσ² − μ² − σ²).
+    """
+    return -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
 
-    # pylint: disable=arguments-differ,unused-argument
-    def process(self):
-        # unused – we bypass PyG's disk processing, keeping everything in memory
-        pass
+# -----------------------------------------------------------------------------
+# IC50 loss (MAE) – пригодится на Stage B
+# -----------------------------------------------------------------------------
 
-    def process_records(self, records):
-        data_list = []
-        for mol_id, smi, ic50 in records:
-            mol = mol_from_smiles(smi)
-            if mol is None:
-                continue
-            data = mol_to_graph_data(mol)
-            data.y = torch.tensor([ic50], dtype=torch.float)
-            data.mol_id = mol_id
-            data_list.append(data)
-        return self.collate(data_list)
+def ic50_loss(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    mask: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """MAE по доступным значениям.
+
+    Если *mask* — булев (T) или {0,1}, берём только присутствующие элементы.
+    """
+    if mask is not None:
+        pred = pred[mask]
+        target = target[mask]
+    return F.l1_loss(pred, target, reduction="mean")

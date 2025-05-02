@@ -1,41 +1,63 @@
+# -----------------------
+#  Главный конфиг Stage A
+# -----------------------
+
+# Пути к данным ------------------------------------------------------
 data:
-  raw_csv: mol_gnn_project/data/raw/compounds.csv   # id,smiles,ic50 (µM)
-  processed_dataset: mol_gnn_project/data/processed/dataset.pt
-  use_cache: true
+  csv_path: mol_gnn_project/data/raw/compounds.csv          # сырой CSV
+  dataset_pt: mol_gnn_project/data/processed/dataset.pt      # сериализованный GraphDataset
+  use_cache: true                                            # загружать dataset_pt, если есть
 
-
-
+# Сплиты --------------------------------------------------------------
 split:
-  train: 0.7
-  val: 0.15
-  test: 0.15
+  train: 0.70
+  val:   0.15
+  test:  0.15
   random_state: 42
 
-vae:
-  hidden_dim: 256
-  num_layers: 3
-  latent_dim: 64
-  beta: 0.1
-  batch_size: 128
-  epochs: 50
-  lr: 1e-3
-  weight_decay: 1e-5
+# Параметры модели ----------------------------------------------------
+model:
+  hidden_dim: 256    # размер скрытого слоя в энкодере/декодере
+  num_layers: 3      # число GNN-слоёв в энкодере
+  latent_dim: 64     # размер латентного вектора z
 
-regressor:
-  hidden_dims: [128, 64]
-  dropout: 0.2
-  batch_size: 128
-  epochs: 30
-  lr: 1e-3
-  weight_decay: 1e-5
+# Гиперпараметры обучения --------------------------------------------
+training:
+  use_gpu: true             # использовать GPU, если он доступен
 
-generation:
-  n_seeds: 100
-  n_steps: 50
-  step_size: 0.05  # η in gradient search
-  top_k: 100       # number of unique decoded SMILES to keep
+  batch_size: 128          # число графов в одном батче
+  adapt_bs: false          # для роста batch_size
+  max_batch_size: 512     # до какого максимума можно увеличивать
+  bs_increase_every: 10   # каждые N эпох удваиваем batch_size
 
+  epochs: 50               # сколько проходов по всем данным
+
+  lr: 1e-2                 # скорость обучения (learning rate)
+  adapt_lr: true         # для вкл/выкл ReduceLROnPlateau
+  lr_factor: 0.5          # во сколько раз уменьшаем LR
+  lr_patience: 5          # epochs без улучшения val_loss → lr_scheduler.step()
+
+  weight_decay: 1e-2       # L2-регуляризация для весов
+  adapt_wd: true         # для адаптивного weight_decay
+  wd_factor: 0.5          # во сколько раз уменьшаем WD
+  wd_patience: 5          # epochs без улучшения val_loss → снижение WD
+
+  # KL-annealing
+  beta_max: 0.05            # верхний предел β (ELBO = Recon + β·KLD)
+  adapt_beta: false        # для изменения β_max на лету
+  max_beta: 0.5            # наверх, если хотим «дозакрутить» β
+  warmup_epochs: 30        # за сколько эпох разогреваем β до beta_max
+  beta_rec_thresh: 0.06    # если Recon < thresh, поднимаем beta_max
+  beta_factor: 1.2         # во сколько раз увеличиваем beta_max
+
+  # Прочее
+  num_workers: 4            # DataLoader workers, число процессов для загрузки данных
+  recon_mode: mse          # способ вычисления ошибки реконструкции
+                           # («mse» для непрерывных признаков;
+                           #  «ce» — для one-hot классов)
+  patience: 15             # терпимость для early-stopping (эпохи без улучшения val-loss)
+
+# Директории логов / чекпойнтов --------------------------------------
 logging:
-  log_dir: runs/
+  log_dir: runs/            # TensorBoard
   checkpoint_dir: checkpoints/
-
