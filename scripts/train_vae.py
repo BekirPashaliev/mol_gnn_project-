@@ -79,17 +79,27 @@ def main():
     dataset = load_dataset(cfg)
 
     # -------- split train/val ----------------------------------------
-    if isinstance(dataset, dict):  # dataset.pt = {train, val, test}
-        train_ds = dataset["train"]
-        val_ds = dataset["val"]
-    else:  # единый датасет – делим на лету
-        idx_tr, idx_va = train_test_split(
-            range(len(dataset)),
-            test_size=cfg['split']['val'],
-            random_state=cfg['split']['random_state']
-        )
-        train_ds = Subset(dataset, idx_tr)
-        val_ds = Subset(dataset, idx_va)
+    # Если вы хотите „быстрый“ тест на малой подвыборке:
+    DEBUG_SMALL = cfg["training"].get("debug_small", False)
+    if DEBUG_SMALL:
+        # сколько примеров на train / val
+        n_train = cfg["training"].get("debug_n_train", len(dataset["train"]))
+        n_val = cfg["training"].get("debug_n_val", len(dataset["val"]))
+        train_ds = Subset(dataset["train"], list(range(n_train)))
+        val_ds = Subset(dataset["val"], list(range(n_val)))
+        print(f"[DEBUG] using {n_train} train / {n_val} val samples")
+    else:
+        if isinstance(dataset, dict):  # dataset.pt = {train, val, test}
+            train_ds = dataset["train"]
+            val_ds = dataset["val"]
+        else:  # единый датасет – делим на лету
+            idx_tr, idx_va = train_test_split(
+                range(len(dataset)),
+                test_size=cfg['split']['val'],
+                random_state=cfg['split']['random_state']
+            )
+            train_ds = Subset(dataset, idx_tr)
+            val_ds = Subset(dataset, idx_va)
 
     # -------- модель --------------------------------------------------
     node_dim = train_ds[0].x.size(1)
@@ -113,7 +123,7 @@ def main():
         train_ds,
         val_ds,
         cfg['training'],
-        Path("runs")/Path(args.cfg).stem
+        cfg['logging']
     )
 
 

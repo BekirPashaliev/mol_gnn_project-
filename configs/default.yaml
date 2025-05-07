@@ -1,6 +1,11 @@
 # -----------------------
-#  Главный конфиг Stage A
+#  Главный конфиг Stage A
 # -----------------------
+
+# Общие параметры воспроизводимости
+seed: 42
+deterministic: true      # torch.use_deterministic_algorithms(True)
+
 
 # Пути к данным ------------------------------------------------------
 data:
@@ -21,11 +26,18 @@ model:
   num_layers: 3      # число GNN-слоёв в энкодере
   latent_dim: 64     # размер латентного вектора z
 
+  gnn_type: gin             # gcn / gin / gine / sage
+  edge_decode: false        # восстанавливать ли рёбра
+
 # Гиперпараметры обучения --------------------------------------------
 training:
   use_gpu: true             # использовать GPU, если он доступен
 
-  batch_size: 128          # число графов в одном батче
+  debug_small: false       # включить „малый“ режим
+  debug_n_train: 1000      # взять первые 200 графов для train
+  debug_n_val: 200         # и первые 50 для val
+
+  batch_size: 32          # число графов в одном батче
   adapt_bs: false          # для роста batch_size
   max_batch_size: 512     # до какого максимума можно увеличивать
   bs_increase_every: 10   # каждые N эпох удваиваем batch_size
@@ -33,9 +45,14 @@ training:
   epochs: 50               # сколько проходов по всем данным
 
   lr: 1e-2                 # скорость обучения (learning rate)
-  adapt_lr: true         # для вкл/выкл ReduceLROnPlateau
+  adapt_lr: true           # для вкл/выкл ReduceLROnPlateau
+  scheduler_type: plateau  # plateau или cosine
+  # параметры для plateau
   lr_factor: 0.5          # во сколько раз уменьшаем LR
   lr_patience: 5          # epochs без улучшения val_loss → lr_scheduler.step()
+  # параметры для cosine
+  cosine_T_max: 50        # период (в эпохах) цикла cosine
+  cosine_eta_min: 1e-6    # минимальный LR в конце цикла
 
   weight_decay: 1e-2       # L2-регуляризация для весов
   adapt_wd: true         # для адаптивного weight_decay
@@ -44,7 +61,7 @@ training:
 
   # KL-annealing
   beta_max: 0.05            # верхний предел β (ELBO = Recon + β·KLD)
-  adapt_beta: false        # для изменения β_max на лету
+  adapt_beta: true        # для изменения β_max на лету
   max_beta: 0.5            # наверх, если хотим «дозакрутить» β
   warmup_epochs: 30        # за сколько эпох разогреваем β до beta_max
   beta_rec_thresh: 0.06    # если Recon < thresh, поднимаем beta_max
@@ -56,8 +73,41 @@ training:
                            # («mse» для непрерывных признаков;
                            #  «ce» — для one-hot классов)
   patience: 15             # терпимость для early-stopping (эпохи без улучшения val-loss)
+  save_every: 10     # сохранять чекпоинт каждые N эпох вне зависимости от валид.лосса
+  best_only: true    # или false — если false, сохранять каждый `save_every`-й
 
 # Директории логов / чекпойнтов --------------------------------------
 logging:
-  log_dir: runs/            # TensorBoard
-  checkpoint_dir: checkpoints/
+  track_metrics: true       # отслеживать метрики (4 + 3 + 10)
+  metrics_freq: 2           # считать и логировать метрики каждые 2 эпохи
+  use_mlflow: false         # если true — дублируем лог в MLflow
+  log_dir: mol_gnn_project/runs/            # TensorBoard
+  plot_dir: mol_gnn_project/runs/plots/      # куда сохранять PNG из visualizations
+  checkpoint_dir: mol_gnn_project/checkpoints/
+
+
+generation:
+  method: gradient          # gradient / beam
+  beam_width: 10
+  depth:      5
+  n_children: 20
+  step_size: 0.1
+  n_steps:   50
+
+tuning:
+  backend: optuna           # optuna / ray
+  n_trials: 50
+  direction: minimize       # (или maximize для AUC/PR)
+  timeout: 3600             # сек
+
+metrics:
+  include:
+    - loss
+    - recon
+    - kld
+    - ELBO
+    - Node_MSE
+    - Edge_BCE
+    - Validity
+    - Novelty
+  beta_rec_thresh: 0.06     # порог для включения β-адаптации
